@@ -53,7 +53,6 @@ const EMPTY_ROOM_TTL = 30 * 60 * 1000; // 空房间30分钟后清除
  * }
  */
 const rooms = {};
-loadRooms();
 
 // socketId -> { roomNumber, playerId, gameId }
 const socketMap = {};
@@ -112,6 +111,7 @@ function loadRooms() {
     else console.log('[Persist] No rooms to restore (all expired)');
   } catch (e) { console.error('[Persist] load error:', e.message); }
 }
+loadRooms();
 
 // ==================== 工具函数 ====================
 function genRoomNumber() {
