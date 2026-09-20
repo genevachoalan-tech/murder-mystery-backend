@@ -1,4 +1,4 @@
-# Murder Mystery Backend
+﻿# Murder Mystery Backend
 
 Socket.IO 后端服务，支持多个剧本杀线上游戏的房间管理与状态同步。
 
