@@ -5,6 +5,18 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const fs = require('fs');
+const path = require('path');
+
+// ==================== 全局错误保护（防止单个异常导致进程崩溃） ====================
+process.on('uncaughtException', (err) => {
+  console.error(`[FATAL][${new Date().toISOString()}] uncaughtException: ${err.message}`);
+  console.error(err.stack);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error(`[FATAL][${new Date().toISOString()}] unhandledRejection: ${reason}`);
+  if (reason && reason.stack) console.error(reason.stack);
+});
 
 const app = express();
 const server = http.createServer(app);
@@ -41,9 +53,65 @@ const EMPTY_ROOM_TTL = 30 * 60 * 1000; // 空房间30分钟后清除
  * }
  */
 const rooms = {};
+loadRooms();
 
 // socketId -> { roomNumber, playerId, gameId }
 const socketMap = {};
+
+// ==================== 房间状态持久化（崩溃重启后自动恢复） ====================
+const DATA_DIR = path.join(__dirname, 'data');
+const ROOMS_FILE = path.join(DATA_DIR, 'rooms.json');
+let _saveTimer = null;
+
+function ensureDataDir() {
+  try { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); } catch(e) { console.error('[Persist] mkdir error:', e.message); }
+}
+
+function saveRooms() {
+  try {
+    ensureDataDir();
+    const snapshot = {};
+    for (const num in rooms) {
+      const room = rooms[num];
+      const players = {};
+      for (const pid in room.players) {
+        const p = room.players[pid];
+        players[pid] = {
+          playerId: p.playerId, nickname: p.nickname,
+          charId: p.charId || null, socketId: null, online: false,
+          lastSeen: p.lastSeen, isDM: p.isDM || false, seat: p.seat || null
+        };
+      }
+      snapshot[num] = {
+        gameId: room.gameId, dmSocketId: null, dmPlayerId: room.dmPlayerId,
+        players, state: room.state, createdAt: room.createdAt, lastActivity: room.lastActivity
+      };
+    }
+    fs.writeFileSync(ROOMS_FILE, JSON.stringify(snapshot), 'utf-8');
+  } catch (e) { console.error('[Persist] save error:', e.message); }
+}
+
+// 防抖保存：状态变化后1秒落盘，避免频繁IO
+function scheduleSave() {
+  if (_saveTimer) return;
+  _saveTimer = setTimeout(() => { _saveTimer = null; saveRooms(); }, 1000);
+}
+
+function loadRooms() {
+  try {
+    if (!fs.existsSync(ROOMS_FILE)) { console.log('[Persist] No saved rooms file, starting fresh'); return; }
+    const data = JSON.parse(fs.readFileSync(ROOMS_FILE, 'utf-8'));
+    let count = 0;
+    for (const num in data) {
+      // 只恢复最近24小时内有活动的房间
+      if (Date.now() - (data[num].lastActivity || 0) > 24 * 60 * 60 * 1000) continue;
+      rooms[num] = data[num];
+      count++;
+    }
+    if (count > 0) console.log(`[Persist] Restored ${count} room(s) from disk`);
+    else console.log('[Persist] No rooms to restore (all expired)');
+  } catch (e) { console.error('[Persist] load error:', e.message); }
+}
 
 // ==================== 工具函数 ====================
 function genRoomNumber() {
@@ -111,6 +179,7 @@ function cleanupEmptyRooms() {
 }
 
 setInterval(cleanupEmptyRooms, ROOM_CLEANUP_INTERVAL);
+setInterval(saveRooms, 30000); // 每30秒强制保存一次
 
 // ==================== Express 路由 ====================
 app.get('/', (req, res) => {
@@ -176,6 +245,7 @@ io.on('connection', (socket) => {
       socketMap[socket.id] = { roomNumber, playerId: dmPlayerId, gameId, isDM: true };
 
       console.log(`[CreateRoom] room=${roomNumber} game=${gameId} dm=${socket.id}`);
+      scheduleSave();
 
       ack && ack({
         success: true,
@@ -234,6 +304,7 @@ io.on('connection', (socket) => {
       room.lastActivity = Date.now();
 
       console.log(`[JoinRoom] room=${roomNumber} player=${pid} nickname=${nickname} reconnect=${!!existingPlayer}`);
+      scheduleSave();
 
       // 通知 DM 有玩家加入/重连
       sendToDM(roomNumber, 'player_joined', {
@@ -268,6 +339,7 @@ io.on('connection', (socket) => {
   // DM 发送: 广播给所有玩家
   // 玩家发送: 只发给 DM
   socket.on('game_msg', (data) => {
+    try {
     const info = socketMap[socket.id];
     if (!info) return;
     const { roomNumber, isDM } = info;
@@ -288,10 +360,12 @@ io.on('connection', (socket) => {
         data
       });
     }
+    } catch (e) { console.error('[game_msg error]', e.message); }
   });
 
   // ---------- 私聊消息（DM -> 指定玩家，不广播） ----------
   socket.on('private_msg', (data) => {
+    try {
     const info = socketMap[socket.id];
     if (!info || !info.isDM) return;
     const { toPlayerId, data: msgData } = data || {};
@@ -302,10 +376,12 @@ io.on('connection', (socket) => {
     if (targetPlayer && targetPlayer.socketId) {
       io.to(targetPlayer.socketId).emit('private_msg', { from: 'dm', data: msgData });
     }
+    } catch (e) { console.error('[private_msg error]', e.message); }
   });
 
   // ---------- 状态更新（DM 发送，服务器缓存并广播） ----------
   socket.on('state_update', (data) => {
+    try {
     const info = socketMap[socket.id];
     if (!info || !info.isDM) return;
     const room = getRoom(info.roomNumber);
@@ -313,13 +389,16 @@ io.on('connection', (socket) => {
 
     room.state = data;
     room.lastActivity = Date.now();
+    scheduleSave();
 
     // 广播给所有玩家
     broadcastToRoom(info.roomNumber, 'state_update', data, socket.id);
+    } catch (e) { console.error('[state_update error]', e.message); }
   });
 
   // ---------- 心跳 pong ----------
   socket.on('pong', () => {
+    try {
     const info = socketMap[socket.id];
     if (!info) return;
     const room = getRoom(info.roomNumber);
@@ -332,10 +411,12 @@ io.on('connection', (socket) => {
         broadcastToRoom(info.roomNumber, 'player_status', { players: getPublicPlayers(room) });
       }
     }
+    } catch (e) { console.error('[pong error]', e.message); }
   });
 
   // ---------- DM 踢人 ----------
   socket.on('kick_player', (data) => {
+    try {
     const info = socketMap[socket.id];
     if (!info || !info.isDM) return;
     const room = getRoom(info.roomNumber);
@@ -349,10 +430,12 @@ io.on('connection', (socket) => {
       player.socketId = null;
     }
     broadcastToRoom(info.roomNumber, 'player_status', { players: getPublicPlayers(room) });
+    } catch (e) { console.error('[kick_player error]', e.message); }
   });
 
   // ---------- DM 结束房间 ----------
   socket.on('end_room', () => {
+    try {
     const info = socketMap[socket.id];
     if (!info || !info.isDM) return;
     const roomNumber = info.roomNumber;
@@ -371,6 +454,8 @@ io.on('connection', (socket) => {
     }
 
     delete rooms[roomNumber];
+    scheduleSave();
+    } catch (e) { console.error('[end_room error]', e.message); }
   });
 
   // ---------- 断开连接 ----------
@@ -417,6 +502,7 @@ function handleDisconnect(socket, reason) {
 
   room.lastActivity = Date.now();
   delete socketMap[socket.id];
+  scheduleSave();
 }
 
 function leaveCurrentRoom(socket) {
@@ -443,6 +529,7 @@ io.engine.on('connection', (socket) => {
 // 让我们在连接后通过一个特殊事件处理
 io.on('connection', (socket) => {
   socket.on('reconnect_dm', (data, ack) => {
+    try {
     const { roomNumber, dmPlayerId, gameId } = data || {};
     const room = getRoom(roomNumber);
     if (!room) {
@@ -473,6 +560,7 @@ io.on('connection', (socket) => {
     broadcastToRoom(roomNumber, 'player_status', { players: getPublicPlayers(room) }, socket.id);
 
     console.log(`[DM Reconnect] room=${roomNumber} dm=${socket.id}`);
+    scheduleSave();
 
     ack && ack({
       success: true,
@@ -481,6 +569,7 @@ io.on('connection', (socket) => {
       players: getPublicPlayers(room),
       fullState: room.state
     });
+    } catch (e) { console.error('[reconnect_dm error]', e.message); ack && ack({ success: false, error: '服务器内部错误' }); }
   });
 });
 

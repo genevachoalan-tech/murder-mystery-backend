@@ -3,3 +3,6 @@ npm-debug.log*
 .DS_Store
 *.log
 .env
+# Room state persistence (do not commit)
+data/
+node_modules/
