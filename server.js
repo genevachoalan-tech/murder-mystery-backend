@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Murder Mystery Backend - Socket.IO Server
  * 支持多游戏（陌生人 / 冒险王 / 胎屋）的房间管理与状态同步
  */
@@ -264,7 +264,11 @@ io.on('connection', (socket) => {
     try {
       const { gameId, roomNumber, playerId, nickname, charId } = data || {};
 
+      console.log('[JoinRoom DEBUG] socket=' + socket.id + ' gameId=' + gameId + ' roomNumber="' + roomNumber + '" type=' + typeof roomNumber + ' playerId=' + playerId);
+      console.log('[JoinRoom DEBUG] 当前房间列表: [' + Object.keys(rooms).join(', ') + ']');
+      console.log('[JoinRoom DEBUG] rooms[roomNumber]=' + (rooms[roomNumber] ? 'EXISTS' : 'UNDEFINED'));
       if (!roomNumber || !rooms[roomNumber]) {
+        console.log('[JoinRoom DEBUG] 失败！房间不存在。roomNumber="' + roomNumber + '"');
         return ack && ack({ success: false, error: '房间不存在或已结束' });
       }
 
