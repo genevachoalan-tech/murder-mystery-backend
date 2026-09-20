@@ -6,7 +6,6 @@ Socket.IO 后端服务，支持多个剧本杀线上游戏的房间管理与状�
 
 - `stranger` - 陌生人
 - `adventure-king` - 冒险王之投了个骰
-- `taiwu` - 胎屋（预留）
 
 ## 功能
 
