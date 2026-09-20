@@ -33,7 +33,7 @@ const io = new Server(server, {
 
 // ==================== 配置 ====================
 const DM_PASSWORD = process.env.DM_PASSWORD || '1314520';
-const VALID_GAME_IDS = ['stranger', 'adventure-king', 'taiwu'];
+const VALID_GAME_IDS = ['stranger', 'adventure-king'];
 const PORT = process.env.PORT || 3000;
 const ROOM_CLEANUP_INTERVAL = 60000; // 1分钟清理一次空房间
 const EMPTY_ROOM_TTL = 30 * 60 * 1000; // 空房间30分钟后清除
