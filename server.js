@@ -290,6 +290,20 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ---------- 私聊消息（DM -> 指定玩家，不广播） ----------
+  socket.on('private_msg', (data) => {
+    const info = socketMap[socket.id];
+    if (!info || !info.isDM) return;
+    const { toPlayerId, data: msgData } = data || {};
+    if (!toPlayerId) return;
+    const room = getRoom(info.roomNumber);
+    if (!room) return;
+    const targetPlayer = room.players[toPlayerId];
+    if (targetPlayer && targetPlayer.socketId) {
+      io.to(targetPlayer.socketId).emit('private_msg', { from: 'dm', data: msgData });
+    }
+  });
+
   // ---------- 状态更新（DM 发送，服务器缓存并广播） ----------
   socket.on('state_update', (data) => {
     const info = socketMap[socket.id];
