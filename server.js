@@ -203,7 +203,7 @@ io.on('connection', (socket) => {
   // ---------- DM 创建房间 ----------
   socket.on('create_room', (data, ack) => {
     try {
-      const { gameId, password } = data || {};
+      const { gameId, password, roomNumber: preferredRoom } = data || {};
 
       // 验证 gameId
       if (!VALID_GAME_IDS.includes(gameId)) {
@@ -218,7 +218,13 @@ io.on('connection', (socket) => {
       // 如果此 socket 已在其他房间，先离开
       leaveCurrentRoom(socket);
 
-      const roomNumber = genRoomNumber();
+      // 使用前端传来的房间号（如有效且未被占用），否则后端生成
+      let roomNumber;
+      if (preferredRoom && /^\d{6}$/.test(String(preferredRoom)) && !rooms[preferredRoom]) {
+        roomNumber = String(preferredRoom);
+      } else {
+        roomNumber = genRoomNumber();
+      }
       const dmPlayerId = 'dm_' + Date.now().toString(36);
 
       rooms[roomNumber] = {
@@ -264,11 +270,7 @@ io.on('connection', (socket) => {
     try {
       const { gameId, roomNumber, playerId, nickname, charId } = data || {};
 
-      console.log('[JoinRoom DEBUG] socket=' + socket.id + ' gameId=' + gameId + ' roomNumber="' + roomNumber + '" type=' + typeof roomNumber + ' playerId=' + playerId);
-      console.log('[JoinRoom DEBUG] 当前房间列表: [' + Object.keys(rooms).join(', ') + ']');
-      console.log('[JoinRoom DEBUG] rooms[roomNumber]=' + (rooms[roomNumber] ? 'EXISTS' : 'UNDEFINED'));
       if (!roomNumber || !rooms[roomNumber]) {
-        console.log('[JoinRoom DEBUG] 失败！房间不存在。roomNumber="' + roomNumber + '"');
         return ack && ack({ success: false, error: '房间不存在或已结束' });
       }
 
